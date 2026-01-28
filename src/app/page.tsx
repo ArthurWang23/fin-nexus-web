@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Send, Bot, User, Menu, Plus, LogOut, Sparkles, Newspaper, ChevronDown, ChevronUp, BrainCircuit } from "lucide-react";
+import { Send, Square, Bot, User, Menu, Plus, LogOut, Sparkles, Newspaper, ChevronDown, ChevronUp, BrainCircuit, Settings } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useRouter } from "next/navigation";
@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { AuroraBackground } from "@/components/ui/aurora-background";
 import { MorningBriefDialog } from "@/components/morning-brief-dialog";
+import { ModelConfigDialog } from "@/components/model-config-dialog";
 
 import { useFinNexus } from "@/hooks/use-fin-nexus";
 import { useEffect, useState } from "react";
@@ -26,10 +27,11 @@ type Message = {
 };
 
 export default function ChatPage() {
-  const { messages, status, thinkingSteps, sessions, currentSessionId, fetchSessions, loadSession, startNewSession, sendMessage } = useFinNexus();
+  const { messages, status, thinkingSteps, sessions, currentSessionId, fetchSessions, loadSession, startNewSession, sendMessage, cancelWorkflow } = useFinNexus();
   const [input, setInput] = React.useState("");
   const [isLoading, setIsLoading] = React.useState(false);
   const [showBrief, setShowBrief] = React.useState(false);
+  const [showModelConfig, setShowModelConfig] = React.useState(false);
   const [isThinkingExpanded, setIsThinkingExpanded] = React.useState(true);
   const router = useRouter();
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
@@ -60,6 +62,18 @@ export default function ChatPage() {
       // Optional: Load most recent session? 
       // For now, let user pick or start new if empty.
     });
+
+    // Auto-show Morning Brief if new version available
+    fetch("/api/v1/brief/version")
+      .then(res => res.json())
+      .then(data => {
+        const serverVersion = data.version;
+        const dismissedVersion = localStorage.getItem("fin-nexus-brief-dismissed-version");
+        if (serverVersion && serverVersion !== dismissedVersion) {
+          setShowBrief(true);
+        }
+      })
+      .catch(() => { }); // Silently fail if version API unavailable
   }, [router, fetchSessions]);
 
   useEffect(() => {
@@ -111,6 +125,9 @@ export default function ChatPage() {
             </Button>
             <Button variant="ghost" className="w-full justify-start gap-2 bg-white/5 hover:bg-white/10 text-neutral-300 hover:text-white mt-2 border border-white/5" onClick={() => setShowBrief(true)}>
               <Newspaper size={16} /> Morning Brief
+            </Button>
+            <Button variant="ghost" className="w-full justify-start gap-2 bg-white/5 hover:bg-white/10 text-neutral-300 hover:text-white mt-2 border border-white/5" onClick={() => setShowModelConfig(true)}>
+              <Settings size={16} /> Model Settings
             </Button>
           </div>
           <ScrollArea className="flex-1 px-4 py-2">
@@ -279,17 +296,27 @@ export default function ChatPage() {
                   onKeyDown={(e) => e.key === "Enter" && handleSend()}
                   autoComplete="off"
                 />
-                <Button
-                  onClick={handleSend}
-                  disabled={isLoading || !input.trim()}
-                  className={`mb-1 transition-all duration-300 ${input.trim()
-                    ? "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/25"
-                    : "bg-white/10 text-neutral-500 hover:bg-white/20"
-                    }`}
-                  size="icon"
-                >
-                  <Send size={18} />
-                </Button>
+                {isLoading ? (
+                  <Button
+                    onClick={cancelWorkflow}
+                    className="mb-1 bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-500/25 transition-all duration-300"
+                    size="icon"
+                  >
+                    <Square size={16} />
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={handleSend}
+                    disabled={!input.trim()}
+                    className={`mb-1 transition-all duration-300 ${input.trim()
+                      ? "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/25"
+                      : "bg-white/10 text-neutral-500 hover:bg-white/20"
+                      }`}
+                    size="icon"
+                  >
+                    <Send size={18} />
+                  </Button>
+                )}
               </div>
               <div className="text-center mt-2">
                 <p className="text-[10px] text-neutral-600">Fin-Nexus AI can make mistakes. Consider checking important information.</p>
@@ -298,7 +325,24 @@ export default function ChatPage() {
           </div>
         </div>
       </AuroraBackground>
-      <MorningBriefDialog open={showBrief} onOpenChange={setShowBrief} />
+      <MorningBriefDialog
+        open={showBrief}
+        onOpenChange={(open) => {
+          setShowBrief(open);
+          if (!open) {
+            // Record current server version when user closes the dialog
+            fetch("/api/v1/brief/version")
+              .then(res => res.json())
+              .then(data => {
+                if (data.version) {
+                  localStorage.setItem("fin-nexus-brief-dismissed-version", data.version);
+                }
+              })
+              .catch(() => { });
+          }
+        }}
+      />
+      <ModelConfigDialog open={showModelConfig} onOpenChange={setShowModelConfig} />
     </div>
   );
 }

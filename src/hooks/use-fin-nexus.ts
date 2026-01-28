@@ -148,6 +148,7 @@ export function useFinNexus() {
                 // 4. 完成 (Done) - 也许后端会发，或者就只是停止发 token
                 else if (data.type === "done") {
                     setStatus("connected");
+                    setThinkingSteps([]); // 清除思考过程，隐藏 Thinking Process 区域
                     // 可以在这里刷新 session 列表 (如果是新会话)
                     fetchSessions(token);
                 }
@@ -183,6 +184,19 @@ export function useFinNexus() {
         wsRef.current.send(text);
     }, []);
 
+    // 取消当前工作流
+    const cancelWorkflow = useCallback(() => {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+            console.error("WS not connected");
+            return;
+        }
+        wsRef.current.send("CANCEL");
+        setStatus("connected");
+        setThinkingSteps([]);
+        // 清空正在流式输出的内容缓冲
+        responseBuffer.current = "";
+    }, []);
+
     return {
         messages,
         status,
@@ -192,6 +206,7 @@ export function useFinNexus() {
         fetchSessions,
         loadSession,
         startNewSession,
-        sendMessage
+        sendMessage,
+        cancelWorkflow
     };
 }
