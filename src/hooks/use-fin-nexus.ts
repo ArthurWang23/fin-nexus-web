@@ -188,14 +188,35 @@ export function useFinNexus() {
     const cancelWorkflow = useCallback(() => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
             console.error("WS not connected");
-            return;
+            // If just just thinking (frontend state) but WS closed, we should still clean up UI
         }
-        wsRef.current.send("CANCEL");
-        setStatus("connected");
+
+        // Send cancel if connected
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send("CANCEL");
+        }
+
+        setStatus("connected"); // Reset status to connected (ready for new input)
         setThinkingSteps([]);
-        // 清空正在流式输出的内容缓冲
         responseBuffer.current = "";
-    }, []);
+
+        // Calculate restored content from current state
+        let restoredContent = "";
+        let newHistory = [...messages];
+
+        if (newHistory.length > 0 && newHistory[newHistory.length - 1].role === "assistant") {
+            newHistory.pop();
+        }
+        if (newHistory.length > 0 && newHistory[newHistory.length - 1].role === "user") {
+            restoredContent = newHistory[newHistory.length - 1].content;
+            newHistory.pop();
+        }
+
+        // Update state
+        setMessages(newHistory);
+
+        return restoredContent;
+    }, [messages]);
 
     return {
         messages,

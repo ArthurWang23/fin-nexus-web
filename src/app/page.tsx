@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { Send, Square, Bot, User, Menu, Plus, LogOut, Sparkles, Newspaper, ChevronDown, ChevronUp, BrainCircuit, Settings } from "lucide-react";
+import { Send, Square, Bot, User, Menu, Plus, LogOut, Sparkles, Newspaper, ChevronDown, ChevronUp, BrainCircuit, Settings, Paperclip } from "lucide-react";
+import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useRouter } from "next/navigation";
@@ -35,6 +36,7 @@ export default function ChatPage() {
   const [isThinkingExpanded, setIsThinkingExpanded] = React.useState(true);
   const router = useRouter();
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -107,6 +109,52 @@ export default function ChatPage() {
   const handleLogout = () => {
     localStorage.removeItem("fin-nexus-token");
     router.push("/auth/login");
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reset input so validation triggers can fire again for same file if needed
+    e.target.value = "";
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const token = localStorage.getItem("fin-nexus-token");
+    if (!token) {
+      router.push("/auth/login");
+      return;
+    }
+
+    // Optimistic UI or Loading state could be added here
+    try {
+      const res = await fetch("/api/v1/upload", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        toast.error("Upload failed", {
+          description: errorData.error || "Unknown error",
+        });
+        return;
+      }
+
+      const data = await res.json();
+      toast.success("File uploaded", {
+        description: `${data.filename} has been queued for indexing.`,
+      });
+    } catch (err) {
+      console.error("Upload error:", err);
+      toast.error("Upload failed", {
+        description: "Please check your connection and try again.",
+      });
+    }
   };
 
   return (
@@ -207,8 +255,8 @@ export default function ChatPage() {
                     {/* Bubble */}
                     <div className={`flex flex-col max-w-[85%] ${msg.role === "user" ? "items-end" : "items-start"}`}>
                       <div className={`px-6 py-3.5 rounded-2xl shadow-xl backdrop-blur-sm ${msg.role === "user"
-                        ? "bg-blue-600 text-white rounded-tr-sm"
-                        : "bg-white/10 border border-white/5 text-neutral-100 rounded-tl-sm"
+                        ? "bg-gradient-to-br from-blue-600 to-indigo-600 text-white rounded-tr-sm border border-blue-400/20 shadow-lg shadow-blue-900/20"
+                        : "bg-white/5 border border-white/10 text-neutral-100 rounded-tl-sm shadow-lg backdrop-blur-md"
                         }`}>
                         <div className="prose prose-invert prose-sm max-w-none break-words leading-relaxed">
                           <ReactMarkdown
@@ -296,9 +344,32 @@ export default function ChatPage() {
                   onKeyDown={(e) => e.key === "Enter" && handleSend()}
                   autoComplete="off"
                 />
+
+                {/* Hidden File Input */}
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  className="hidden"
+                  onChange={handleFileUpload}
+                  accept=".pdf,.txt,.md,.markdown"
+                />
+
+                {/* Upload Button */}
+                <Button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="mb-1 bg-white/5 hover:bg-white/10 text-neutral-400 hover:text-white transition-all duration-300"
+                  size="icon"
+                  title="Upload file to Knowledge Base"
+                >
+                  <Paperclip size={18} />
+                </Button>
+
                 {isLoading ? (
                   <Button
-                    onClick={cancelWorkflow}
+                    onClick={() => {
+                      const restored = cancelWorkflow();
+                      if (restored) setInput(restored);
+                    }}
                     className="mb-1 bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-500/25 transition-all duration-300"
                     size="icon"
                   >
