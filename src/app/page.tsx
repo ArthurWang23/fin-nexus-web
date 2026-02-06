@@ -16,6 +16,7 @@ import { Separator } from "@/components/ui/separator";
 import { AuroraBackground } from "@/components/ui/aurora-background";
 import { MorningBriefDialog } from "@/components/morning-brief-dialog";
 import { ModelConfigDialog } from "@/components/model-config-dialog";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 
 import { useFinNexus } from "@/hooks/use-fin-nexus";
 import { useEffect, useState } from "react";
@@ -28,19 +29,24 @@ type Message = {
 };
 
 export default function ChatPage() {
-  const { messages, status, thinkingSteps, sessions, currentSessionId, fetchSessions, loadSession, startNewSession, sendMessage, cancelWorkflow } = useFinNexus();
+  const { messages, status, thinkingSteps, agentOutputs, sessions, currentSessionId, fetchSessions, loadSession, startNewSession, sendMessage, runBlueprint, cancelWorkflow } = useFinNexus();
   const [input, setInput] = React.useState("");
   const [isLoading, setIsLoading] = React.useState(false);
   const [showBrief, setShowBrief] = React.useState(false);
   const [showModelConfig, setShowModelConfig] = React.useState(false);
   const [isThinkingExpanded, setIsThinkingExpanded] = React.useState(true);
+  const [isAgentExpanded, setIsAgentExpanded] = React.useState(true); // Blueprint agent 输出展开状态
+
+  const [blueprints, setBlueprints] = React.useState<{ id: string, name: string }[]>([]);
+  const [selectedBlueprint, setSelectedBlueprint] = React.useState<{ id: string, name: string } | null>(null);
+
   const router = useRouter();
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, thinkingSteps, status]);
+  }, [messages, thinkingSteps, agentOutputs, status]);
 
   // Auto-expand when thinking, collapse when streaming starts
   useEffect(() => {
@@ -59,11 +65,22 @@ export default function ChatPage() {
       return;
     }
 
-    // Load sessions
+    // Load sessions & Blueprints
     fetchSessions(token).then(() => {
       // Optional: Load most recent session? 
-      // For now, let user pick or start new if empty.
     });
+
+    fetch("/api/v1/blueprints", { headers: { "Authorization": `Bearer ${token}` } })
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setBlueprints(data);
+        } else {
+          console.warn("Blueprints API returned non-array:", data);
+          setBlueprints([]);
+        }
+      })
+      .catch(err => console.error("Failed to load blueprints", err));
 
     // Auto-show Morning Brief if new version available
     fetch("/api/v1/brief/version")
@@ -92,13 +109,25 @@ export default function ChatPage() {
         // Start new session and send
         startNewSession(token);
         // Need a small delay or improved hook to queue message. 
-        // For this MVP, we'll auto-send after a short delay to allow WS to open.
-        setTimeout(() => sendMessage(input), 1000);
+        setTimeout(() => {
+          if (selectedBlueprint) {
+            runBlueprint(selectedBlueprint.id, input);
+          } else {
+            sendMessage(input);
+          }
+        }, 1000);
       }
     } else {
-      sendMessage(input);
+      if (selectedBlueprint) {
+        runBlueprint(selectedBlueprint.id, input);
+      } else {
+        sendMessage(input);
+      }
     }
     setInput("");
+    // selectedBlueprint should persist? Or clear it? 
+    // Usually one-off, let's clear it to avoid confusion or keep it if 'mode' based.
+    // Let's keep it for now as "mode".
   };
 
   const handleNewChat = () => {
@@ -177,8 +206,11 @@ export default function ChatPage() {
             <Button variant="ghost" className="w-full justify-start gap-2 bg-white/5 hover:bg-white/10 text-neutral-300 hover:text-white mt-2 border border-white/5" onClick={() => setShowModelConfig(true)}>
               <Settings size={16} /> Model Settings
             </Button>
+            <Button variant="ghost" className="w-full justify-start gap-2 bg-white/5 hover:bg-white/10 text-neutral-300 hover:text-white mt-2 border border-white/5" onClick={() => router.push('/blueprints')}>
+              <BrainCircuit size={16} /> Blueprints
+            </Button>
           </div>
-          <ScrollArea className="flex-1 px-4 py-2">
+          <ScrollArea className="flex-1 min-h-0 px-4 py-2">
             <div className="space-y-1">
               {sessions.length === 0 && (
                 <div className="text-neutral-500 text-sm text-center py-4 italic">No history yet</div>
@@ -234,10 +266,21 @@ export default function ChatPage() {
                 {messages.length === 0 && (
                   <div className="flex flex-col items-center justify-center h-[50vh] text-center space-y-4 opacity-0 animate-in fade-in duration-1000 slide-in-from-bottom-5 fill-mode-forwards" style={{ animationDelay: '0.2s', opacity: 1 }}>
                     <div className="p-4 rounded-full bg-white/5 border border-white/10 backdrop-blur">
-                      <Bot size={48} className="text-blue-400" />
+                      {selectedBlueprint ? (
+                        <BrainCircuit size={48} className="text-purple-400" />
+                      ) : (
+                        <Bot size={48} className="text-blue-400" />
+                      )}
                     </div>
-                    <h2 className="text-2xl font-semibold text-white">How can I help you today?</h2>
-                    <p className="text-neutral-400 max-w-md">I can analyze market trends, review earnings reports, or explain complex financial concepts.</p>
+                    <h2 className="text-2xl font-semibold text-white">
+                      {selectedBlueprint ? `Ready to run ${selectedBlueprint.name}` : "How can I help you today?"}
+                    </h2>
+                    <p className="text-neutral-400 max-w-md">
+                      {selectedBlueprint
+                        ? "This custom workflow is configured and ready to execute. Enter your input below to start."
+                        : "I can analyze market trends, review earnings reports, or explain complex financial concepts."
+                      }
+                    </p>
                   </div>
                 )}
 
@@ -316,6 +359,40 @@ export default function ChatPage() {
                   </div>
                 )}
 
+                {/* Agent Output Block - Blueprint 内部节点输出 */}
+                {agentOutputs.length > 0 && (
+                  <div className="flex gap-4 animate-in fade-in slide-in-from-bottom-2">
+                    <Avatar className="h-10 w-10 ring-2 ring-white/10 opacity-50"><AvatarFallback className="bg-black border border-white/10"><Bot size={20} className="text-cyan-400" /></AvatarFallback></Avatar>
+                    <div className="w-full max-w-[85%]">
+                      <div className="rounded-lg border border-cyan-500/20 bg-cyan-900/10 overflow-hidden">
+                        <button
+                          onClick={() => setIsAgentExpanded(!isAgentExpanded)}
+                          className="w-full flex items-center justify-between px-4 py-2 bg-cyan-900/20 hover:bg-cyan-900/30 transition-colors text-xs font-medium text-cyan-300"
+                        >
+                          <span className="flex items-center gap-2">
+                            <Bot size={12} />
+                            Agent Workflow ({agentOutputs.length})
+                          </span>
+                          {isAgentExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        </button>
+
+                        {isAgentExpanded && (
+                          <div className="p-3 space-y-2 bg-black/20 max-h-48 overflow-y-auto">
+                            {agentOutputs.map((output, idx) => (
+                              <div key={idx} className="text-xs text-gray-400 font-mono pl-2 border-l-2 border-cyan-500/20 animate-in fade-in whitespace-pre-wrap">
+                                {output.length > 200 ? output.slice(0, 200) + '...' : output}
+                              </div>
+                            ))}
+                            {status === "streaming" && (
+                              <span className="inline-block w-2 h-2 bg-cyan-500 rounded-full animate-pulse ml-2" />
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {status === "thinking" && (
                   <div className="flex gap-4">
                     <Avatar className="h-10 w-10 ring-2 ring-white/10"><AvatarFallback className="bg-black border border-white/10"><Bot size={20} className="text-blue-400" /></AvatarFallback></Avatar>
@@ -338,7 +415,7 @@ export default function ChatPage() {
               <div className="relative flex items-end gap-2 bg-[#09090b] border border-white/10 rounded-xl p-2 shadow-2xl">
                 <Input
                   className="flex-1 bg-transparent border-none text-white placeholder:text-neutral-500 focus-visible:ring-0 focus-visible:ring-offset-0 min-h-[50px] py-3 px-4 resize-none"
-                  placeholder="Ask Fin-Nexus about markets, stocks, or strategies..."
+                  placeholder={selectedBlueprint ? `Input for ${selectedBlueprint.name}...` : "Ask Fin-Nexus about markets, stocks, or strategies..."}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSend()}
@@ -353,6 +430,39 @@ export default function ChatPage() {
                   onChange={handleFileUpload}
                   accept=".pdf,.txt,.md,.markdown"
                 />
+
+                {/* Blueprint Selector */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={`mb-1 transition-all duration-300 ${selectedBlueprint ? "bg-purple-600/20 text-purple-400 hover:bg-purple-600/30 ring-1 ring-purple-500/50" : "bg-white/5 hover:bg-white/10 text-neutral-400 hover:text-white"}`}
+                      title={selectedBlueprint ? `Active: ${selectedBlueprint.name}` : "Select Workflow Blueprint"}
+                    >
+                      <BrainCircuit size={18} />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-56 bg-[#18181b] border-white/10 text-neutral-200">
+                    <DropdownMenuLabel>Run Workflow</DropdownMenuLabel>
+                    <DropdownMenuSeparator className="bg-white/10" />
+                    <DropdownMenuItem
+                      className="cursor-pointer focus:bg-white/10"
+                      onClick={() => setSelectedBlueprint(null)}
+                    >
+                      <span className={!selectedBlueprint ? "text-blue-400" : ""}>Default Assistant</span>
+                    </DropdownMenuItem>
+                    {blueprints.map(bp => (
+                      <DropdownMenuItem
+                        key={bp.id}
+                        className="cursor-pointer focus:bg-white/10"
+                        onClick={() => setSelectedBlueprint(bp)}
+                      >
+                        <span className={selectedBlueprint?.id === bp.id ? "text-purple-400" : ""}>{bp.name}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
 
                 {/* Upload Button */}
                 <Button

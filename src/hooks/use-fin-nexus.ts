@@ -21,6 +21,7 @@ export function useFinNexus() {
     const [sessions, setSessions] = useState<Session[]>([]);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
     const [thinkingSteps, setThinkingSteps] = useState<string[]>([]);
+    const [agentOutputs, setAgentOutputs] = useState<string[]>([]); // Blueprint 内部节点输出
 
     const wsRef = useRef<WebSocket | null>(null);
     const responseBuffer = useRef("");
@@ -141,15 +142,20 @@ export function useFinNexus() {
                         return newHistory;
                     });
                 }
-                // 3. 错误
+                // 3. Blueprint 内部节点输出 (Agent Output) - 显示为可折叠的小字
+                else if (data.type === "agent_output") {
+                    setStatus("streaming");
+                    setAgentOutputs((prev) => [...prev, data.content]);
+                }
+                // 4. 错误
                 else if (data.type === "error") {
                     console.error("Agent Error:", data.content);
                 }
-                // 4. 完成 (Done) - 也许后端会发，或者就只是停止发 token
+                // 5. 完成 (Done)
                 else if (data.type === "done") {
                     setStatus("connected");
-                    setThinkingSteps([]); // 清除思考过程，隐藏 Thinking Process 区域
-                    // 可以在这里刷新 session 列表 (如果是新会话)
+                    setThinkingSteps([]);
+                    setAgentOutputs([]); // 清除 agent 输出
                     fetchSessions(token);
                 }
 
@@ -175,13 +181,31 @@ export function useFinNexus() {
 
         // 1. UI 显示 User Message
         setMessages((prev) => [...prev, { id: Date.now().toString(), role: "user", content: text }]);
-        setThinkingSteps([]); // Clear thinking steps on new message
+        setThinkingSteps([]);
+        setAgentOutputs([]); // 清除之前的 agent 输出
 
         // 2. 清空 Buffer
         responseBuffer.current = "";
 
-        // 3. 发送
-        wsRef.current.send(text);
+        // 3. 发送 JSON
+        const msg = { type: "chat", content: text };
+        wsRef.current.send(JSON.stringify(msg));
+    }, []);
+
+    // 运行蓝图
+    const runBlueprint = useCallback((blueprintId: string, input: string) => {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+            console.error("WS not connected");
+            return;
+        }
+
+        setMessages((prev) => [...prev, { id: Date.now().toString(), role: "user", content: input }]);
+        setThinkingSteps([]);
+        setAgentOutputs([]); // 清除之前的 agent 输出
+        responseBuffer.current = "";
+
+        const msg = { type: "blueprint", blueprint_id: blueprintId, content: input };
+        wsRef.current.send(JSON.stringify(msg));
     }, []);
 
     // 取消当前工作流
@@ -193,7 +217,7 @@ export function useFinNexus() {
 
         // Send cancel if connected
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send("CANCEL");
+            wsRef.current.send(JSON.stringify({ type: "cancel" }));
         }
 
         setStatus("connected"); // Reset status to connected (ready for new input)
@@ -222,12 +246,14 @@ export function useFinNexus() {
         messages,
         status,
         thinkingSteps,
+        agentOutputs, // Blueprint 内部节点输出
         sessions,
         currentSessionId,
         fetchSessions,
         loadSession,
         startNewSession,
         sendMessage,
+        runBlueprint,
         cancelWorkflow
     };
 }
