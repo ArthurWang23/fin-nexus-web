@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Send, Square, Bot, User, Menu, Plus, LogOut, Sparkles, Newspaper, ChevronDown, ChevronUp, BrainCircuit, Settings, Paperclip, ShieldCheck, ShieldX, Pencil, RotateCcw } from "lucide-react";
+import { Send, Square, Bot, User, Menu, Plus, LogOut, Sparkles, Newspaper, ChevronDown, ChevronUp, BrainCircuit, Settings, Paperclip, ShieldCheck, ShieldX, Pencil, RotateCcw, ListChecks, CheckCircle2, Circle, Loader2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -137,7 +137,7 @@ function CodeReviewBlock({ code, onApprove, onReject }: {
 }
 
 export default function ChatPage() {
-  const { messages, status, thinkingSteps, agentOutputs, pendingApproval, sessions, currentSessionId, fetchSessions, loadSession, startNewSession, sendMessage, runBlueprint, approveAction, cancelWorkflow } = useFinNexus();
+  const { messages, status, thinkingSteps, agentOutputs, pendingApproval, executionPlan, sessions, currentSessionId, fetchSessions, loadSession, startNewSession, sendMessage, runBlueprint, approveAction, cancelWorkflow } = useFinNexus();
   const [input, setInput] = React.useState("");
   const [isLoading, setIsLoading] = React.useState(false);
   const [showBrief, setShowBrief] = React.useState(false);
@@ -428,6 +428,56 @@ export default function ChatPage() {
                     </div>
                   </div>
                 ))}
+
+                {/* Execution Plan Block */}
+                {executionPlan && executionPlan.steps.length > 0 && (
+                  <div className="flex gap-4 animate-in fade-in slide-in-from-bottom-2">
+                    <Avatar className="h-10 w-10 ring-2 ring-cyan-500/30 shrink-0">
+                      <AvatarFallback className="bg-black border border-cyan-500/20">
+                        <ListChecks size={20} className="text-cyan-400" />
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="w-full max-w-[85%]">
+                      <div className="rounded-lg border border-cyan-500/20 bg-cyan-900/5 overflow-hidden">
+                        <div className="px-4 py-2.5 bg-cyan-900/20 text-xs font-medium text-cyan-300 flex items-center gap-2">
+                          <ListChecks size={14} />
+                          执行计划 — {executionPlan.steps.filter(s => s.status === "done").length}/{executionPlan.steps.length} 完成
+                        </div>
+                        <div className="p-3 space-y-1.5">
+                          {executionPlan.steps.map((step) => (
+                            <div key={step.id} className={`flex items-start gap-2 text-xs px-2 py-1.5 rounded ${
+                              step.status === "done" ? "text-green-400/80" :
+                              step.status === "running" ? "text-cyan-300 bg-cyan-900/20" :
+                              step.status === "error" ? "text-red-400/80" :
+                              "text-gray-500"
+                            }`}>
+                              <span className="mt-0.5 shrink-0">
+                                {step.status === "done" ? <CheckCircle2 size={14} /> :
+                                 step.status === "running" ? <Loader2 size={14} className="animate-spin" /> :
+                                 step.status === "error" ? <XCircle size={14} /> :
+                                 <Circle size={14} />}
+                              </span>
+                              <span>
+                                <span className="font-mono text-[10px] px-1 py-0.5 rounded bg-white/5 mr-1.5">
+                                  {step.agent}
+                                </span>
+                                {step.instruction}
+                                {step.depends_on.length > 0 && (
+                                  <span className="text-gray-600 ml-1">← 依赖 Step {step.depends_on.join(", ")}</span>
+                                )}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                        {executionPlan.thought && (
+                          <div className="px-4 py-2 border-t border-white/5 text-[10px] text-gray-500 italic">
+                            💭 {executionPlan.thought}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Thinking Process Block */}
                 {thinkingSteps.length > 0 && (

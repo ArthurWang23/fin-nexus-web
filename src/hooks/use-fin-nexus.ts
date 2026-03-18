@@ -18,6 +18,19 @@ export type PendingApproval = {
     code: string;
 };
 
+export type PlanStep = {
+    id: number;
+    agent: string;
+    instruction: string;
+    depends_on: number[];
+    status: "pending" | "running" | "done" | "error";
+};
+
+export type ExecutionPlan = {
+    thought: string;
+    steps: PlanStep[];
+} | null;
+
 export function useFinNexus() {
     const [messages, setMessages] = useState<Message[]>([]);
     const [status, setStatus] = useState<"idle" | "connected" | "thinking" | "streaming" | "awaiting_approval">("idle");
@@ -26,6 +39,7 @@ export function useFinNexus() {
     const [thinkingSteps, setThinkingSteps] = useState<string[]>([]);
     const [agentOutputs, setAgentOutputs] = useState<string[]>([]);
     const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
+    const [executionPlan, setExecutionPlan] = useState<ExecutionPlan>(null);
 
     const eventSourceRef = useRef<EventSource | null>(null);
     const responseBuffer = useRef("");
@@ -127,6 +141,31 @@ export function useFinNexus() {
                     setStatus("streaming");
                     setAgentOutputs((prev) => [...prev, data.content]);
                 }
+                else if (data.type === "plan") {
+                    try {
+                        const plan = JSON.parse(data.content);
+                        setExecutionPlan({
+                            thought: plan.thought,
+                            steps: plan.steps.map((s: any) => ({ ...s, status: "pending" as const })),
+                        });
+                    } catch (e) {
+                        console.error("Failed to parse plan", e);
+                    }
+                }
+                else if (data.type === "step_complete") {
+                    try {
+                        const info = JSON.parse(data.content);
+                        setExecutionPlan((prev) => {
+                            if (!prev) return prev;
+                            return {
+                                ...prev,
+                                steps: prev.steps.map((s) =>
+                                    s.id === info.id ? { ...s, status: info.status } : s
+                                ),
+                            };
+                        });
+                    } catch (e) { /* ignore */ }
+                }
                 else if (data.type === "approval_required") {
                     setStatus("awaiting_approval");
                     setPendingApproval({ code: data.content });
@@ -138,6 +177,7 @@ export function useFinNexus() {
                     setStatus("connected");
                     setThinkingSteps([]);
                     setAgentOutputs([]);
+                    setExecutionPlan(null);
                     setPendingApproval(null);
                     if (tokenRef.current) {
                         fetchSessions(tokenRef.current);
@@ -168,6 +208,7 @@ export function useFinNexus() {
         setThinkingSteps([]);
         setAgentOutputs([]);
         setPendingApproval(null);
+        setExecutionPlan(null);
         responseBuffer.current = "";
 
         try {
@@ -290,6 +331,7 @@ export function useFinNexus() {
         thinkingSteps,
         agentOutputs,
         pendingApproval,
+        executionPlan,
         sessions,
         currentSessionId,
         fetchSessions,
