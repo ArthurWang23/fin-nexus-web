@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Send, Square, Bot, User, Menu, Plus, LogOut, Sparkles, Newspaper, ChevronDown, ChevronUp, BrainCircuit, Settings, Paperclip } from "lucide-react";
+import { Send, Square, Bot, User, Menu, Plus, LogOut, Sparkles, Newspaper, ChevronDown, ChevronUp, BrainCircuit, Settings, Paperclip, ShieldCheck, ShieldX, Pencil, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -28,8 +28,116 @@ type Message = {
   content: string;
 };
 
+function CodeReviewBlock({ code, onApprove, onReject }: {
+  code: string;
+  onApprove: (modifiedCode?: string) => void;
+  onReject: (reason?: string) => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedCode, setEditedCode] = useState(code);
+  const [rejectReason, setRejectReason] = useState("");
+  const [showRejectInput, setShowRejectInput] = useState(false);
+  const isModified = editedCode !== code;
+
+  return (
+    <div className="flex gap-4 animate-in fade-in slide-in-from-bottom-2">
+      <Avatar className="h-10 w-10 ring-2 ring-amber-500/30 shrink-0">
+        <AvatarFallback className="bg-black border border-amber-500/20">
+          <ShieldCheck size={20} className="text-amber-400" />
+        </AvatarFallback>
+      </Avatar>
+      <div className="w-full max-w-[85%]">
+        <div className="rounded-lg border border-amber-500/30 bg-amber-900/10 overflow-hidden">
+          <div className="px-4 py-2.5 bg-amber-900/20 text-xs font-medium text-amber-300 flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <ShieldCheck size={14} />
+              代码审查 — 请审阅 Coder 生成的 Python 代码
+            </span>
+            <div className="flex items-center gap-1.5">
+              {isEditing && isModified && (
+                <button
+                  onClick={() => { setEditedCode(code); }}
+                  className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-white transition-colors px-1.5 py-0.5 rounded bg-white/5 hover:bg-white/10"
+                >
+                  <RotateCcw size={10} /> 还原
+                </button>
+              )}
+              <button
+                onClick={() => setIsEditing(!isEditing)}
+                className={`flex items-center gap-1 text-[10px] transition-colors px-1.5 py-0.5 rounded ${
+                  isEditing ? "text-amber-300 bg-amber-500/20" : "text-gray-400 hover:text-white bg-white/5 hover:bg-white/10"
+                }`}
+              >
+                <Pencil size={10} /> {isEditing ? "编辑中" : "编辑代码"}
+              </button>
+            </div>
+          </div>
+          <div className="bg-black/30">
+            {isEditing ? (
+              <textarea
+                value={editedCode}
+                onChange={(e) => setEditedCode(e.target.value)}
+                className="w-full text-xs text-green-300 font-mono bg-transparent p-3 border-0 outline-none resize-y min-h-[120px] max-h-[400px]"
+                spellCheck={false}
+              />
+            ) : (
+              <pre className="text-xs text-green-300 font-mono whitespace-pre-wrap p-3 max-h-[400px] overflow-y-auto select-text">
+                {editedCode}
+              </pre>
+            )}
+          </div>
+          {isModified && (
+            <div className="px-3 py-1.5 bg-blue-900/20 border-t border-blue-500/20 text-[10px] text-blue-300 flex items-center gap-1.5">
+              <Pencil size={10} /> 代码已修改 — 将使用修改后的版本执行
+            </div>
+          )}
+          <div className="p-3 border-t border-white/5 flex items-center gap-2">
+            <Button
+              size="sm"
+              className="bg-green-600 hover:bg-green-500 text-white gap-1.5 text-xs"
+              onClick={() => onApprove(isModified ? editedCode : undefined)}
+            >
+              <ShieldCheck size={14} /> {isModified ? "批准执行（修改后）" : "批准执行"}
+            </Button>
+            {!showRejectInput ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-red-500/30 text-red-400 hover:bg-red-900/20 hover:text-red-300 gap-1.5 text-xs"
+                onClick={() => setShowRejectInput(true)}
+              >
+                <ShieldX size={14} /> 拒绝
+              </Button>
+            ) : (
+              <div className="flex items-center gap-2 flex-1">
+                <input
+                  type="text"
+                  placeholder="拒绝理由（可选）"
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") onReject(rejectReason || "用户拒绝"); }}
+                  className="flex-1 text-xs bg-black/30 border border-red-500/20 rounded px-2 py-1.5 text-gray-300 placeholder:text-gray-600 outline-none focus:border-red-500/40"
+                  autoFocus
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-red-500/30 text-red-400 hover:bg-red-900/20 text-xs shrink-0"
+                  onClick={() => onReject(rejectReason || "用户拒绝")}
+                >
+                  确认拒绝
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ChatPage() {
-  const { messages, status, thinkingSteps, agentOutputs, sessions, currentSessionId, fetchSessions, loadSession, startNewSession, sendMessage, runBlueprint, cancelWorkflow } = useFinNexus();
+  const { messages, status, thinkingSteps, agentOutputs, pendingApproval, sessions, currentSessionId, fetchSessions, loadSession, startNewSession, sendMessage, runBlueprint, approveAction, cancelWorkflow } = useFinNexus();
   const [input, setInput] = React.useState("");
   const [isLoading, setIsLoading] = React.useState(false);
   const [showBrief, setShowBrief] = React.useState(false);
@@ -96,7 +204,7 @@ export default function ChatPage() {
   }, [router, fetchSessions]);
 
   useEffect(() => {
-    setIsLoading(status === "thinking" || status === "streaming");
+    setIsLoading(status === "thinking" || status === "streaming" || status === "awaiting_approval");
   }, [status]);
 
   const handleSend = () => {
@@ -305,13 +413,9 @@ export default function ChatPage() {
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
                             components={{
-                              img: ({ node, ...props }) => {
-                                let src = props.src || "";
-                                if (typeof src === "string" && src.startsWith("/images")) {
-                                  src = `http://localhost:8080${src}`;
-                                }
-                                return <img {...props} src={src as string} className="max-w-full rounded-lg border border-white/10 my-3 shadow-md bg-black/20" alt="chart" />;
-                              },
+                              img: ({ node, ...props }) => (
+                                <img {...props} className="max-w-full rounded-lg border border-white/10 my-3 shadow-md bg-black/20" alt={props.alt || "chart"} />
+                              ),
                               p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
                               a: ({ node, ...props }) => <a className="text-blue-300 hover:text-blue-200 underline underline-offset-2" {...props} />,
                               code: ({ node, ...props }) => <code className="bg-black/30 px-1 py-0.5 rounded text-yellow-200 font-mono text-xs" {...props} />,
@@ -357,6 +461,15 @@ export default function ChatPage() {
                       </div>
                     </div>
                   </div>
+                )}
+
+                {/* Code Review Block - Human-in-the-loop */}
+                {pendingApproval && (
+                  <CodeReviewBlock
+                    code={pendingApproval.code}
+                    onApprove={(modifiedCode) => approveAction(true, undefined, modifiedCode)}
+                    onReject={(reason) => approveAction(false, reason)}
+                  />
                 )}
 
                 {/* Agent Output Block - Blueprint 内部节点输出 */}
@@ -476,8 +589,8 @@ export default function ChatPage() {
 
                 {isLoading ? (
                   <Button
-                    onClick={() => {
-                      const restored = cancelWorkflow();
+                    onClick={async () => {
+                      const restored = await cancelWorkflow();
                       if (restored) setInput(restored);
                     }}
                     className="mb-1 bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-500/25 transition-all duration-300"

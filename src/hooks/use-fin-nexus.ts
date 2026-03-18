@@ -1,6 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useCallback } from 'react';
 
-// 消息类型定义
 export type Message = {
     id: string;
     role: "user" | "assistant" | "system";
@@ -15,18 +14,23 @@ export type Session = {
     updated_at: string;
 };
 
+export type PendingApproval = {
+    code: string;
+};
+
 export function useFinNexus() {
     const [messages, setMessages] = useState<Message[]>([]);
-    const [status, setStatus] = useState<"idle" | "connected" | "thinking" | "streaming">("idle");
+    const [status, setStatus] = useState<"idle" | "connected" | "thinking" | "streaming" | "awaiting_approval">("idle");
     const [sessions, setSessions] = useState<Session[]>([]);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
     const [thinkingSteps, setThinkingSteps] = useState<string[]>([]);
-    const [agentOutputs, setAgentOutputs] = useState<string[]>([]); // Blueprint 内部节点输出
+    const [agentOutputs, setAgentOutputs] = useState<string[]>([]);
+    const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
 
-    const wsRef = useRef<WebSocket | null>(null);
+    const eventSourceRef = useRef<EventSource | null>(null);
     const responseBuffer = useRef("");
+    const tokenRef = useRef<string | null>(null);
 
-    // 获取会话列表
     const fetchSessions = useCallback(async (token: string) => {
         try {
             const res = await fetch("/api/v1/sessions", {
@@ -34,7 +38,6 @@ export function useFinNexus() {
             });
             if (res.ok) {
                 const data = await res.json();
-                // 假设后端返回的是 null 或 空数组
                 setSessions(data || []);
             }
         } catch (e) {
@@ -42,27 +45,24 @@ export function useFinNexus() {
         }
     }, []);
 
-    // 加载某个会话的历史记录
     const loadSession = useCallback(async (token: string, sessionId: string) => {
-        // 1. 关闭旧连接
-        if (wsRef.current) {
-            wsRef.current.close();
-            wsRef.current = null;
+        if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
         }
 
         setCurrentSessionId(sessionId);
-        setMessages([]); // 清空当前显示
-        setThinkingSteps([]); // Clear thinking steps
+        setMessages([]);
+        setThinkingSteps([]);
+        setPendingApproval(null);
         setStatus("idle");
 
-        // 2. 获取历史记录
         try {
             const res = await fetch(`/api/v1/sessions/${sessionId}`, {
                 headers: { "Authorization": `Bearer ${token}` }
             });
             if (res.ok) {
                 const history: Message[] = await res.json();
-                // 确保 role 是正确的
                 setMessages(history.map(m => ({
                     ...m,
                     role: m.role as "user" | "assistant" | "system"
@@ -72,60 +72,40 @@ export function useFinNexus() {
             console.error("Failed to load session history", e);
         }
 
-        // 3. 建立新连接
         connect(token, sessionId);
     }, []);
 
-    // 创建新会话 (纯前端生成 ID，有了第一条消息后再刷新列表?)
-    // 或者直接连接，后端会在有消息时创建 Session
     const startNewSession = useCallback((token: string) => {
-        if (wsRef.current) {
-            wsRef.current.close();
+        if (eventSourceRef.current) {
+            eventSourceRef.current.close();
         }
         const newId = crypto.randomUUID();
         setCurrentSessionId(newId);
         setMessages([]);
         setThinkingSteps([]);
+        setPendingApproval(null);
         setStatus("idle");
         connect(token, newId);
         return newId;
     }, []);
 
-    // 连接 WebSocket
     const connect = useCallback((token: string, sessionId: string) => {
-        // 使用 window.location.host 自动适配
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const host = window.location.host; // localhost:3000 -> 代理到 localhost:8080
-        // 由于配置了 next.config.ts rewrite，我们可以直接连 /api/v1/ws/chat (需要确认 rewrite 是否支持 ws)
-        // 遗憾的是 Next.js rewrites 对 WebSocket 支持通常有限或需要配置。
-        // 为了稳妥，可以直接连后端端口 8080，或者假设 rewrite 支持。
-        // 但用户提到 404，说明 rewrite 之前没配好。现在配好了 HTTP，WS 不一定。
-        // 我们直接连 http://localhost:8080/api/v1/ws/chat 对应的 ws 地址 ws://localhost:8080/...
-        // 这里硬编码一下，或者用环境变量。既然是 demo，先写死后端地址。
+        tokenRef.current = token;
 
-        const wsUrl = `ws://localhost:8080/api/v1/ws/chat?token=${token}&session_id=${sessionId}`;
+        const sseBase = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080";
+        const es = new EventSource(`${sseBase}/api/v1/stream?token=${token}&session_id=${sessionId}`);
 
-        const ws = new WebSocket(wsUrl);
-
-        ws.onopen = () => {
-            console.log("WS Connected", sessionId);
-            setStatus("connected");
-        };
-
-        ws.onmessage = (event) => {
+        es.onmessage = (event) => {
             try {
-                // 后端发来的是纯文本或 JSON string
-                // 我们的后端 writePump 是：ws.WriteMessage(websocket.TextMessage, []byte(msg.Payload))
-                // Payload 是 JSON 字符串 {type: "...", content: "..."}
-
                 const data = JSON.parse(event.data);
 
-                // 1. 处理步骤消息 (Step)
-                if (data.type === "step") {
+                if (data.type === "connected") {
+                    setStatus("connected");
+                }
+                else if (data.type === "step") {
                     setStatus("thinking");
                     setThinkingSteps((prev) => [...prev, data.content]);
                 }
-                // 2. 处理流式文字 (Token)
                 else if (data.type === "token") {
                     setStatus("streaming");
                     responseBuffer.current += data.content;
@@ -133,100 +113,164 @@ export function useFinNexus() {
                     setMessages((prev) => {
                         const lastMsg = prev[prev.length - 1];
                         if (!lastMsg || lastMsg.role === "user") {
-                            // 新增一条 assistant 消息
                             return [...prev, { id: Date.now().toString(), role: "assistant", content: responseBuffer.current }];
                         }
-                        // 更新最后一条
                         const newHistory = [...prev];
-                        newHistory[newHistory.length - 1].content = responseBuffer.current;
+                        newHistory[newHistory.length - 1] = {
+                            ...newHistory[newHistory.length - 1],
+                            content: responseBuffer.current,
+                        };
                         return newHistory;
                     });
                 }
-                // 3. Blueprint 内部节点输出 (Agent Output) - 显示为可折叠的小字
                 else if (data.type === "agent_output") {
                     setStatus("streaming");
                     setAgentOutputs((prev) => [...prev, data.content]);
                 }
-                // 4. 错误
+                else if (data.type === "approval_required") {
+                    setStatus("awaiting_approval");
+                    setPendingApproval({ code: data.content });
+                }
                 else if (data.type === "error") {
                     console.error("Agent Error:", data.content);
                 }
-                // 5. 完成 (Done)
                 else if (data.type === "done") {
                     setStatus("connected");
                     setThinkingSteps([]);
-                    setAgentOutputs([]); // 清除 agent 输出
-                    fetchSessions(token);
+                    setAgentOutputs([]);
+                    setPendingApproval(null);
+                    if (tokenRef.current) {
+                        fetchSessions(tokenRef.current);
+                    }
                 }
-
             } catch (e) {
-                console.error("WS Parse Error", e);
+                console.error("SSE Parse Error", e);
             }
         };
 
-        ws.onclose = () => {
-            console.log("WS Closed");
-            if (status !== "idle") setStatus("idle");
-        }
+        es.onerror = () => {
+            if (es.readyState === EventSource.CLOSED) {
+                console.log("SSE Closed");
+                setStatus("idle");
+            }
+        };
 
-        wsRef.current = ws;
-    }, [fetchSessions]); // fetchSessions 依赖
+        eventSourceRef.current = es;
+    }, [fetchSessions]);
 
-    // 发送消息
-    const sendMessage = useCallback((text: string) => {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-            console.error("WS not connected");
+    const sendMessage = useCallback(async (text: string) => {
+        if (!currentSessionId || !tokenRef.current) {
+            console.error("Not connected");
             return;
         }
 
-        // 1. UI 显示 User Message
         setMessages((prev) => [...prev, { id: Date.now().toString(), role: "user", content: text }]);
         setThinkingSteps([]);
-        setAgentOutputs([]); // 清除之前的 agent 输出
-
-        // 2. 清空 Buffer
+        setAgentOutputs([]);
+        setPendingApproval(null);
         responseBuffer.current = "";
 
-        // 3. 发送 JSON
-        const msg = { type: "chat", content: text };
-        wsRef.current.send(JSON.stringify(msg));
-    }, []);
+        try {
+            const res = await fetch("/api/v1/chat/send", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${tokenRef.current}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ session_id: currentSessionId, content: text }),
+            });
+            if (!res.ok) {
+                console.error("Failed to send message:", res.status);
+            }
+        } catch (e) {
+            console.error("Failed to send message", e);
+        }
+    }, [currentSessionId]);
 
-    // 运行蓝图
-    const runBlueprint = useCallback((blueprintId: string, input: string) => {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-            console.error("WS not connected");
+    const runBlueprint = useCallback(async (blueprintId: string, input: string) => {
+        if (!currentSessionId || !tokenRef.current) {
+            console.error("Not connected");
             return;
         }
 
         setMessages((prev) => [...prev, { id: Date.now().toString(), role: "user", content: input }]);
         setThinkingSteps([]);
-        setAgentOutputs([]); // 清除之前的 agent 输出
+        setAgentOutputs([]);
+        setPendingApproval(null);
         responseBuffer.current = "";
 
-        const msg = { type: "blueprint", blueprint_id: blueprintId, content: input };
-        wsRef.current.send(JSON.stringify(msg));
-    }, []);
+        try {
+            const res = await fetch("/api/v1/chat/blueprint", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${tokenRef.current}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId,
+                    blueprint_id: blueprintId,
+                    content: input,
+                }),
+            });
+            if (!res.ok) {
+                console.error("Failed to run blueprint:", res.status);
+            }
+        } catch (e) {
+            console.error("Failed to run blueprint", e);
+        }
+    }, [currentSessionId]);
 
-    // 取消当前工作流
-    const cancelWorkflow = useCallback(() => {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-            console.error("WS not connected");
-            // If just just thinking (frontend state) but WS closed, we should still clean up UI
+    const approveAction = useCallback(async (approved: boolean, reason?: string, modifiedCode?: string) => {
+        if (!currentSessionId || !tokenRef.current) {
+            console.error("Not connected");
+            return;
         }
 
-        // Send cancel if connected
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ type: "cancel" }));
+        setPendingApproval(null);
+        setStatus("thinking");
+
+        try {
+            await fetch("/api/v1/chat/approve", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${tokenRef.current}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId,
+                    approved,
+                    reason: reason || "",
+                    modified_code: modifiedCode || "",
+                }),
+            });
+        } catch (e) {
+            console.error("Failed to send approval", e);
+        }
+    }, [currentSessionId]);
+
+    const cancelWorkflow = useCallback(async () => {
+        if (currentSessionId && tokenRef.current) {
+            try {
+                await fetch("/api/v1/chat/cancel", {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${tokenRef.current}`,
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ session_id: currentSessionId }),
+                });
+            } catch (e) {
+                console.error("Failed to cancel workflow", e);
+            }
         }
 
-        setStatus("connected"); // Reset status to connected (ready for new input)
+        setStatus("connected");
         setThinkingSteps([]);
+        setPendingApproval(null);
         responseBuffer.current = "";
 
-        // Calculate restored content from current state
         let restoredContent = "";
-        let newHistory = [...messages];
+        const newHistory = [...messages];
 
         if (newHistory.length > 0 && newHistory[newHistory.length - 1].role === "assistant") {
             newHistory.pop();
@@ -236,17 +280,16 @@ export function useFinNexus() {
             newHistory.pop();
         }
 
-        // Update state
         setMessages(newHistory);
-
         return restoredContent;
-    }, [messages]);
+    }, [currentSessionId, messages]);
 
     return {
         messages,
         status,
         thinkingSteps,
-        agentOutputs, // Blueprint 内部节点输出
+        agentOutputs,
+        pendingApproval,
         sessions,
         currentSessionId,
         fetchSessions,
@@ -254,6 +297,7 @@ export function useFinNexus() {
         startNewSession,
         sendMessage,
         runBlueprint,
+        approveAction,
         cancelWorkflow
     };
 }
